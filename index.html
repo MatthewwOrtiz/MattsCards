@@ -91,13 +91,6 @@
   .own input { accent-color: var(--accent); }
   .count { color: var(--muted); margin-left: auto; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
-  .status { color: var(--muted); font-size: 13px; max-width: 360px; text-align: right; }
-  .btn[disabled] { opacity: .5; cursor: default; }
-  .cell-edit {
-    width: 4.5em; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;
-    background: var(--bg); text-align: right; font-variant-numeric: tabular-nums;
-  }
-  .cell-edit.edited { border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
 
   /* Table */
   .wrap { padding: 16px 28px 40px; }
@@ -114,6 +107,10 @@
   thead th .arrow { opacity: .6; margin-left: 4px; }
   tbody tr { cursor: pointer; }
   tbody tr:hover td { background: var(--surface-2); }
+  /* rows tinted by the Color column */
+  tbody tr.tinted td { background: color-mix(in srgb, var(--rc) 20%, var(--surface)); }
+  tbody tr.tinted:hover td { background: color-mix(in srgb, var(--rc) 34%, var(--surface)); }
+  tbody tr.tinted td:first-child { background-image: var(--stripe); background-repeat: no-repeat; background-size: 6px 100%; padding-left: 18px; }
 
   /* Colour chips */
   .chips { display: inline-flex; gap: 4px; }
@@ -130,6 +127,7 @@
     padding: 0; overflow: hidden; text-align: left; cursor: pointer; display: flex; flex-direction: column;
   }
   .card:hover { border-color: var(--accent); }
+  .card.tinted { background: color-mix(in srgb, var(--rc) 18%, var(--surface)); }
   .card .band { height: 8px; display: flex; }
   .card .band span { flex: 1; }
   .card .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -177,14 +175,6 @@
   </div>
   <div>
     <div class="actions">
-      <span class="status" id="saveStatus" role="status"></span>
-      <button class="btn primary" id="save" hidden disabled>Save</button>
-      <button class="btn" id="exportXlsx" hidden>Export .xlsx</button>
-      <button class="btn" id="dlEdits" hidden title="Download your edits as a small file you can commit to your repo or load on another device">Download edits</button>
-      <button class="btn" id="impEdits" hidden title="Load an edits file saved from another device">Import edits</button>
-      <input id="impFile" type="file" accept=".json,application/json" hidden>
-      <button class="btn" id="exportCsv" hidden>Export .csv</button>
-      <button class="btn" id="discard" hidden>Discard edits</button>
       <button class="btn" id="changeFile" hidden>Open another file</button>
     </div>
   </div>
@@ -235,13 +225,10 @@
   var state = {
     sheets: {}, sheetNames: [], sheet: "", headers: [], rows: [],
     sort: { col: -1, dir: 1 }, filters: {}, query: "", view: "table",
-    filterCols: [], editCols: [], derivedTotal: false, openRow: -1, imgCol: -1, totalCol: -1, colorCol: -1, nameCol: -1, longCols: {}, numCols: {}
+    filterCols: [], imgCol: -1, totalCol: -1, colorCol: -1, nameCol: -1, longCols: {}, numCols: {}
   };
 
   var $ = function (id) { return document.getElementById(id); };
-  var edits = { file: "", savedAt: 0, sheets: {} };
-  var lastSaved = "{}";
-  var LS_KEY = "optcg-viewer-edits";
   var els = {
     drop: $("drop"), file: $("file"), pick: $("pick"), msg: $("msg"), app: $("app"),
     out: $("out"), q: $("q"), sheet: $("sheet"), filters: $("filters"), count: $("count"),
@@ -263,7 +250,7 @@
     }
     try {
       var wb = XLSX.read(new Uint8Array(buf), { type: "array" });
-      getStoredEdits(name).then(function () { loadWorkbook(wb, name); });
+      loadWorkbook(wb, name);
     } catch (err) {
       console.error(err);
       showError("Couldn’t open that file as a spreadsheet. If it’s a Numbers file, export it to .xlsx from File > Export To and try that.");
@@ -379,7 +366,6 @@
     els.drop.style.display = "none";
     els.app.classList.add("on");
     els.change.hidden = false;
-    $("exportXlsx").hidden = false; $("exportCsv").hidden = false;
     selectSheet(state.sheetNames[0]);
   }
 
@@ -426,9 +412,8 @@
   function selectSheet(name) {
     var s = state.sheets[name];
     state.sheet = name; state.headers = s.headers; state.rows = s.rows;
-    state.sort = { col: -1, dir: 1 }; state.filters = {}; state.query = ""; els.q.value = ""; state.openRow = -1;
+    state.sort = { col: -1, dir: 1 }; state.filters = {}; state.query = ""; els.q.value = "";
     analyseColumns();
-    setupEditing();
     buildFilters();
     els.subtitle.textContent = state.rows.length.toLocaleString() + " rows, " + state.headers.length + " columns" +
       (state.sheetNames.length > 1 ? " on “" + name + "”" : "");
@@ -535,6 +520,21 @@
     }).join("") + '</span>';
   }
 
+  function tintInfo(r) {
+    if (state.colorCol < 0) return null;
+    var hexes = colorsOf(r[state.colorCol]).map(hexFor).filter(Boolean);
+    if (!hexes.length) return null;
+    var stops = hexes.map(function (h, i) {
+      return h + " " + (i * 100 / hexes.length) + "%," + h + " " + ((i + 1) * 100 / hexes.length) + "%";
+    }).join(",");
+    return { rc: hexes[0], stripe: "linear-gradient(to bottom," + stops + ")" };
+  }
+  function tintAttrs(r, base) {
+    var t = tintInfo(r);
+    if (!t) return base ? ' class="' + base + '"' : "";
+    return ' class="' + (base ? base + " " : "") + 'tinted" style="--rc:' + t.rc + ";--stripe:" + t.stripe + '"';
+  }
+
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (ch) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
@@ -566,15 +566,10 @@
     h += "</tr></thead><tbody>";
     var shown = rows.slice(0, 1500);
     shown.forEach(function (r) {
-      h += '<tr data-i="' + state.rows.indexOf(r) + '">';
-      var ri = state.rows.indexOf(r);
+      h += "<tr" + tintAttrs(r) + ' data-i="' + state.rows.indexOf(r) + '">';
       r.forEach(function (v, c) {
         var cls = (state.numCols[c] ? "num " : "") + (state.longCols[c] ? "long" : "");
-        if (state.editCols.indexOf(c) >= 0) {
-          h += '<td class="num">' + editInput(r, ri, c) + "</td>";
-        } else {
-          h += '<td class="' + cls + '">' + cellHTML(v, c) + "</td>";
-        }
+        h += '<td class="' + cls + '">' + cellHTML(v, c) + "</td>";
       });
       h += "</tr>";
     });
@@ -595,7 +590,7 @@
       var parts = state.colorCol >= 0 ? colorsOf(r[state.colorCol]) : [];
       var band = parts.length ? parts.map(function (p) { return '<span style="background:' + (hexFor(p) || "var(--line)") + '"></span>'; }).join("")
                               : '<span style="background:var(--line)"></span>';
-      h += '<button class="card" data-i="' + state.rows.indexOf(r) + '"><div class="band">' + band + '</div><div class="body">' +
+      h += "<button" + tintAttrs(r, "card") + ' data-i="' + state.rows.indexOf(r) + '"><div class="band">' + band + '</div><div class="body">' +
         '<h3>' + esc(state.nameCol >= 0 ? r[state.nameCol] : r[0]) + '</h3>' +
         (state.colorCol >= 0 && String(r[state.colorCol]).trim() ? chipsHTML(r[state.colorCol]) : "") +
         '<div class="facts">';
@@ -619,13 +614,11 @@
 
   function openDetail(i) {
     var r = state.rows[i]; if (!r) return;
-    state.openRow = i;
     els.dtitle.textContent = String(state.nameCol >= 0 ? r[state.nameCol] : r[0]);
     var h = "";
     state.headers.forEach(function (name, c) {
-      var editable = state.editCols.indexOf(c) >= 0;
-      if (String(r[c]).trim() === "" && !editable) return;
-      h += "<dt>" + esc(name) + '</dt><dd data-c="' + c + '">' + (editable ? editInput(r, i, c) : cellHTML(r[c], c)) + "</dd>";
+      if (String(r[c]).trim() === "") return;
+      h += "<dt>" + esc(name) + "</dt><dd>" + cellHTML(r[c], c) + "</dd>";
     });
     els.dl.innerHTML = h;
 
@@ -646,234 +639,6 @@
     if (els.dlg.showModal) els.dlg.showModal(); else els.dlg.setAttribute("open", "");
   }
 
-
-  /* ---------- editing ---------- */
-  function isEdited(r, c) { return !!r.orig && String(r[c]) !== String(r.orig[c]); }
-
-  function editInput(r, ri, c) {
-    return '<input class="cell-edit' + (isEdited(r, c) ? " edited" : "") + '" type="number" min="0" step="1" data-r="' + ri +
-      '" data-c="' + c + '" aria-label="' + esc(state.headers[c]) + '" value="' + esc(r[c]) + '">';
-  }
-
-  function parseNum(v) {
-    v = String(v).trim();
-    if (v === "") return "";
-    var n = Number(v);
-    return isFinite(n) ? n : "";
-  }
-
-  function setupEditing() {
-    state.editCols = [];
-    state.headers.forEach(function (h, c) {
-      var t = h.trim();
-      if (/^#$/.test(t) || /^deck\s*(#|no\.?|number|qty|count)?$/i.test(t)) state.editCols.push(c);
-    });
-    // a stable key per row so edits survive re-sorting the file in Numbers
-    var idCol = -1;
-    state.headers.forEach(function (h, c) {
-      if (idCol < 0 && state.editCols.indexOf(c) < 0 && /card\s*(id|number|no\b|#)|^id$|^number$|^code$/i.test(h.trim())) idCol = c;
-    });
-    var seen = {};
-    state.rows.forEach(function (r) {
-      if (r.key !== undefined) return;
-      var base = (idCol >= 0 ? String(r[idCol]).trim() : "") + "|" + (state.nameCol >= 0 ? String(r[state.nameCol]).trim() : "");
-      seen[base] = (seen[base] || 0) + 1;
-      r.key = base + "#" + seen[base];
-      r.orig = {};
-      state.editCols.forEach(function (c) { r.orig[c] = r[c]; });
-      r.origTotal = state.totalCol >= 0 ? r[state.totalCol] : undefined;
-    });
-    // is Total just the sum of the editable columns? then keep it live
-    state.derivedTotal = false;
-    if (state.totalCol >= 0 && state.editCols.length && state.editCols.indexOf(state.totalCol) < 0) {
-      var ok = 0, n = 0;
-      state.rows.forEach(function (r) {
-        if (typeof r.origTotal !== "number") return;
-        n++;
-        var sum = state.editCols.reduce(function (a, c) { return a + (Number(r.orig[c]) || 0); }, 0);
-        if (r.origTotal === sum) ok++;
-      });
-      state.derivedTotal = n > 0 && ok / n >= 0.9;
-    }
-    applyStored();
-    $("save").hidden = $("dlEdits").hidden = $("impEdits").hidden = !state.editCols.length;
-    updateStatus();
-  }
-
-  function applyStored() {
-    var sheetEdits = edits.sheets[state.sheet] || {};
-    state.rows.forEach(function (r) {
-      if (!r.orig) return;
-      state.editCols.forEach(function (c) { r[c] = r.orig[c]; });
-      var ed = sheetEdits[r.key];
-      if (ed) {
-        state.editCols.forEach(function (c) {
-          if (Object.prototype.hasOwnProperty.call(ed, state.headers[c])) r[c] = ed[state.headers[c]];
-        });
-      }
-      recalcTotal(r);
-    });
-  }
-
-  function recalcTotal(r) {
-    if (!state.derivedTotal) return;
-    r[state.totalCol] = state.editCols.reduce(function (a, c) { return a + (Number(r[c]) || 0); }, 0);
-  }
-
-  function setCell(ri, c, val) {
-    var r = state.rows[ri]; if (!r) return;
-    r[c] = val;
-    recalcTotal(r);
-    var sh = edits.sheets[state.sheet] || (edits.sheets[state.sheet] = {});
-    var entry = sh[r.key] || {};
-    var h = state.headers[c];
-    if (String(val) === String(r.orig[c])) delete entry[h]; else entry[h] = val;
-    if (Object.keys(entry).length) sh[r.key] = entry; else delete sh[r.key];
-    refreshRow(ri);
-    updateStatus();
-  }
-
-  function refreshRow(ri) {
-    var r = state.rows[ri];
-    var tr = els.out.querySelector('tr[data-i="' + ri + '"]');
-    if (tr) {
-      if (state.derivedTotal && tr.children[state.totalCol]) tr.children[state.totalCol].innerHTML = cellHTML(r[state.totalCol], state.totalCol);
-      Array.prototype.forEach.call(tr.querySelectorAll(".cell-edit"), function (inp) { inp.classList.toggle("edited", isEdited(r, +inp.dataset.c)); });
-    }
-    if (state.openRow === ri) {
-      if (state.derivedTotal) {
-        var dd = els.dl.querySelector('dd[data-c="' + state.totalCol + '"]');
-        if (dd) dd.innerHTML = cellHTML(r[state.totalCol], state.totalCol);
-      }
-      Array.prototype.forEach.call(els.dl.querySelectorAll(".cell-edit"), function (inp) { inp.classList.toggle("edited", isEdited(r, +inp.dataset.c)); });
-    }
-  }
-
-  function prunedSheets() {
-    var out = {};
-    Object.keys(edits.sheets).forEach(function (n) {
-      if (Object.keys(edits.sheets[n]).length) out[n] = edits.sheets[n];
-    });
-    return out;
-  }
-  function changeCount() {
-    var sh = prunedSheets();
-    return Object.keys(sh).reduce(function (a, n) { return a + Object.keys(sh[n]).length; }, 0);
-  }
-  function isDirty() { return JSON.stringify(prunedSheets()) !== lastSaved; }
-
-  function setStatus(t) { $("saveStatus").textContent = t; }
-
-  function updateStatus() {
-    var n = changeCount(), dirty = isDirty();
-    var btn = $("save");
-    btn.disabled = !dirty;
-    btn.textContent = dirty ? "Save" + (n ? " (" + n + " card" + (n === 1 ? "" : "s") + ")" : "") : "Saved";
-    $("discard").hidden = !(state.editCols.length && n > 0);
-    if (dirty) setStatus("Unsaved changes");
-  }
-
-  /* ---------- saving ---------- */
-  function baseOf(name) { return String(name).replace(/\.[^.]+$/, ""); }
-  function editsUrl(name) { return baseOf(name).replace(/[^A-Za-z0-9_.-]/g, "_") + ".edits.json"; }
-  var isHttp = /^https?:$/.test(location.protocol);
-
-  function readLocal(name) {
-    try {
-      var o = JSON.parse(localStorage.getItem(LS_KEY + ":" + baseOf(name)));
-      return o && o.sheets ? o : null;
-    } catch (e) { return null; }
-  }
-
-  function getStoredEdits(name) {
-    var local = readLocal(name);
-    var srv = isHttp
-      ? fetch(editsUrl(name), { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
-      : Promise.resolve(null);
-    return srv.then(function (remote) {
-      var best = [remote, local].filter(function (o) { return o && o.sheets; })
-        .sort(function (a, b) { return (b.savedAt || 0) - (a.savedAt || 0); })[0];
-      edits = { file: baseOf(name), savedAt: best ? best.savedAt || 0 : 0, sheets: best ? best.sheets : {} };
-      lastSaved = JSON.stringify(prunedSheets());
-    });
-  }
-
-  function save() {
-    if (!state.editCols.length) return;
-    var snapshot = prunedSheets();
-    var payload = JSON.stringify({ file: edits.file, savedAt: Date.now(), sheets: snapshot });
-    var snap = JSON.stringify(snapshot);
-    var localOk = true;
-    try { localStorage.setItem(LS_KEY + ":" + edits.file, payload); } catch (e) { localOk = false; }
-
-    if (isHttp) {
-      fetch("save-edits", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload })
-        .then(function (r) { if (!r.ok) throw new Error(r.status); lastSaved = snap; updateStatus(); setStatus("Saved to " + editsUrl(edits.file)); })
-        .catch(function () {
-          if (localOk) { lastSaved = snap; updateStatus(); setStatus("Saved in this browser. Use Download edits to keep a copy or use them on another device."); }
-          else setStatus("Couldn’t save. Use Export .xlsx to keep your changes.");
-        });
-    } else if (localOk) {
-      lastSaved = snap; updateStatus(); setStatus("Saved in this browser.");
-    } else {
-      setStatus("Couldn’t save here. Use Export .xlsx to keep your changes.");
-    }
-  }
-
-  function discardEdits() {
-    if (!confirm("Discard all edits? Press Save afterwards to make it permanent.")) return;
-    state.rows.forEach(function (r) {
-      if (!r.orig) return;
-      state.editCols.forEach(function (c) { r[c] = r.orig[c]; });
-    });
-    // totals revert too
-    state.rows.forEach(function (r) { recalcTotal(r); });
-    edits.sheets = {};
-    updateStatus();
-    render();
-  }
-
-  /* ---------- edits file (download / import) ---------- */
-  function downloadEdits() {
-    var payload = JSON.stringify({ file: edits.file, savedAt: Date.now(), sheets: prunedSheets() }, null, 1);
-    download(new Blob([payload], { type: "application/json" }), editsUrl(edits.file));
-  }
-  function importEdits(file) {
-    if (!file) return;
-    var rd = new FileReader();
-    rd.onload = function () {
-      try {
-        var o = JSON.parse(rd.result);
-        if (!o || typeof o.sheets !== "object" || Array.isArray(o.sheets)) throw new Error("bad");
-        edits = { file: edits.file, savedAt: Date.now(), sheets: o.sheets };
-        applyStored(); render(); updateStatus();
-        setStatus("Edits imported. Press Save to keep them in this browser.");
-      } catch (e) { setStatus("That doesn’t look like an edits file."); }
-    };
-    rd.readAsText(file);
-  }
-
-  /* ---------- export ---------- */
-  function exportSheet() {
-    var aoa = [state.headers].concat(state.rows.map(function (r) { return Array.prototype.slice.call(r); }));
-    return XLSX.utils.aoa_to_sheet(aoa);
-  }
-  function download(blob, name) {
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = name;
-    document.body.appendChild(a); a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-  }
-  function exportXlsx() {
-    if (typeof XLSX === "undefined") return;
-    var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, exportSheet(), (state.sheet || "Cards").replace(/[\[\]:*?\/\\]/g, " ").slice(0, 31));
-    XLSX.writeFile(wb, (edits.file || "cards") + " (edited).xlsx");
-  }
-  function exportCsv() {
-    if (typeof XLSX === "undefined") return;
-    download(new Blob(["\ufeff" + XLSX.utils.sheet_to_csv(exportSheet())], { type: "text/csv;charset=utf-8" }), (edits.file || "cards") + " (edited).csv");
-  }
 
   /* ---------- events ---------- */
   els.pick.addEventListener("click", chooseFile);
@@ -913,7 +678,6 @@
     render();
   }
   els.out.addEventListener("click", function (e) {
-    if (e.target.closest(".cell-edit")) return;
     var th = e.target.closest("th[data-c]");
     if (th) { sortBy(+th.dataset.c); return; }
     var row = e.target.closest("[data-i]");
@@ -923,31 +687,6 @@
     if (e.key !== "Enter" && e.key !== " ") return;
     var th = e.target.closest("th[data-c]");
     if (th) { e.preventDefault(); sortBy(+th.dataset.c); }
-  });
-
-  function onEditInput(e) {
-    var t = e.target;
-    if (!t.classList || !t.classList.contains("cell-edit")) return;
-    setCell(+t.dataset.r, +t.dataset.c, parseNum(t.value));
-  }
-  els.out.addEventListener("input", onEditInput);
-  els.dl.addEventListener("input", onEditInput);
-  els.out.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && e.target.classList && e.target.classList.contains("cell-edit")) e.target.blur();
-  });
-  els.dlg.addEventListener("close", function () { state.openRow = -1; render(); });
-  $("save").addEventListener("click", save);
-  $("dlEdits").addEventListener("click", downloadEdits);
-  $("impEdits").addEventListener("click", function () { $("impFile").click(); });
-  $("impFile").addEventListener("change", function () { importEdits(this.files[0]); this.value = ""; });
-  $("discard").addEventListener("click", discardEdits);
-  $("exportXlsx").addEventListener("click", exportXlsx);
-  $("exportCsv").addEventListener("click", exportCsv);
-  document.addEventListener("keydown", function (e) {
-    if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S") && state.editCols.length) { e.preventDefault(); save(); }
-  });
-  window.addEventListener("beforeunload", function (e) {
-    if (state.editCols.length && isDirty()) { e.preventDefault(); e.returnValue = ""; }
   });
 
   autoLoad();
