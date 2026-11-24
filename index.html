@@ -80,6 +80,35 @@
     flex: 1 1 240px; min-width: 200px; padding: 9px 12px; border-radius: 8px;
     border: 1px solid var(--line); background: var(--surface);
   }
+  details.multi { position: relative; }
+  details.multi > summary {
+    list-style: none; cursor: pointer; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface); white-space: nowrap; user-select: none;
+  }
+  details.multi > summary::-webkit-details-marker { display: none; }
+  details.multi > summary::after { content: "▾"; margin-left: 8px; color: var(--muted); }
+  details.multi > summary.active { border-color: var(--accent); font-weight: 600; }
+  details.multi[open] > summary { background: var(--surface-2); }
+  details.multi .panel {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 240px; max-width: 340px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  }
+  details.multi .hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  details.multi .msearch {
+    width: 100%; padding: 6px 8px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg);
+  }
+  details.multi .mode { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+  details.multi .mode button { border: 0; background: var(--surface); padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  details.multi .mode button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  details.multi .list { max-height: 280px; overflow: auto; display: flex; flex-direction: column; }
+  details.multi .opt { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 6px; cursor: pointer; }
+  details.multi .opt[hidden] { display: none; }
+  details.multi .opt:hover { background: var(--surface-2); }
+  details.multi .opt input { accent-color: var(--accent); }
+  details.multi .opt .t { flex: 1; }
+  details.multi .opt .n { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  details.multi .foot { margin-top: 8px; text-align: right; }
   .toolbar select {
     padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
     background: var(--surface); max-width: 190px;
@@ -182,7 +211,7 @@
 
 <main id="app">
   <div class="toolbar">
-    <input type="search" id="q" placeholder="Full Search" aria-label="Search">
+    <input type="search" id="q" placeholder="Search every column" aria-label="Search">
     <select id="sheet" aria-label="Sheet" hidden></select>
     <span id="filters" style="display:contents"></span>
     <label class="own" id="ownWrap" hidden><input type="checkbox" id="own" checked> <span id="ownLabel">Inventory</span></label>
@@ -217,7 +246,7 @@
   var state = {
     sheets: {}, sheetNames: [], sheet: "", headers: [], rows: [],
     sort: { col: -1, dir: 1 }, filters: {}, query: "", view: "table",
-    filterCols: [], imgCol: -1, totalCol: -1, colorCol: -1, nameCol: -1, longCols: {}, numCols: {}
+    filterCols: [], multiCols: [], multi: {}, multiMode: {}, imgCol: -1, totalCol: -1, colorCol: -1, nameCol: -1, longCols: {}, numCols: {}
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -403,7 +432,7 @@
   function selectSheet(name) {
     var s = state.sheets[name];
     state.sheet = name; state.headers = s.headers; state.rows = s.rows;
-    state.sort = { col: -1, dir: 1 }; state.filters = {}; state.query = ""; els.q.value = "";
+    state.sort = { col: -1, dir: 1 }; state.filters = {}; state.multi = {}; state.multiMode = {}; state.query = ""; els.q.value = "";
     analyseColumns();
     buildFilters();
     render();
@@ -453,7 +482,105 @@
     state.headers.forEach(function (h, c) { if (state.totalCol < 0 && /^total$/i.test(h.trim())) state.totalCol = c; });
     state.headers.forEach(function (h, c) { if (state.totalCol < 0 && /total/i.test(h)) state.totalCol = c; });
     els.ownWrap.hidden = state.totalCol < 0;
+
+    // Columns that combine several items with + or & become pick-many checkbox filters
+    state.multiCols = [];
+    state.headers.forEach(function (h, c) {
+      if (c === state.nameCol || c === state.imgCol || state.numCols[c] || state.longCols[c] || /rarity/i.test(h)) return;
+      var vals = state.rows.map(function (r) { return String(r[c]).trim(); }).filter(Boolean);
+      if (!vals.length) return;
+      var urls = vals.filter(function (v) { return /^https?:\/\//i.test(v); }).length;
+      if (urls > vals.length * 0.3) return;
+      if (!vals.some(function (v) { return /[+&]/.test(v); })) return;
+      var tokens = {};
+      vals.forEach(function (v) { tokensOf(v).forEach(function (t) { tokens[t.toLowerCase()] = 1; }); });
+      if (Object.keys(tokens).length > 120) return;
+      state.multiCols.push(c);
+    });
+    state.filterCols = state.filterCols.filter(function (c) { return state.multiCols.indexOf(c) < 0; });
     if (state.totalCol >= 0) els.ownLabel.textContent = state.headers[state.totalCol] + " Inventory";
+  }
+
+  function tokensOf(v) {
+    return String(v).split(/\s*[+&]\s*/).map(function (t) { return t.trim(); }).filter(Boolean);
+  }
+  function mk(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function buildMultiFilter(c) {
+    var counts = {};
+    state.rows.forEach(function (r) {
+      tokensOf(r[c]).forEach(function (t) {
+        var k = t.toLowerCase();
+        (counts[k] = counts[k] || { key: k, label: t, n: 0 }).n++;
+      });
+    });
+    var opts = Object.keys(counts).map(function (k) { return counts[k]; })
+      .sort(function (a, b) { return a.label.localeCompare(b.label, undefined, { numeric: true }); });
+
+    var det = mk("details", "multi"), sum = mk("summary"), panel = mk("div", "panel");
+    var cbs = [], items = [];
+    function setLabel() {
+      var n = state.multi[c] ? Object.keys(state.multi[c]).length : 0;
+      sum.textContent = state.headers[c] + (n ? ": " + n + " selected" : ": all");
+      sum.classList.toggle("active", n > 0);
+    }
+    function pick(key, on) {
+      var sel = state.multi[c] || (state.multi[c] = {});
+      if (on) sel[key] = 1; else delete sel[key];
+      if (!Object.keys(sel).length) delete state.multi[c];
+      setLabel(); render();
+    }
+    var hint = mk("div", "hint");
+    var mode = mk("div", "mode"), bAny = mk("button", "", "Any"), bAll = mk("button", "", "All");
+    bAny.type = "button"; bAll.type = "button";
+    function setMode(m, rerender) {
+      state.multiMode[c] = m;
+      bAny.setAttribute("aria-pressed", m === "any"); bAll.setAttribute("aria-pressed", m === "all");
+      hint.textContent = m === "any" ? "Shows cards that have any of the ticked values" : "Shows cards that have all of the ticked values";
+      if (rerender && state.multi[c]) render();
+    }
+    bAny.addEventListener("click", function () { setMode("any", true); });
+    bAll.addEventListener("click", function () { setMode("all", true); });
+    mode.appendChild(bAny); mode.appendChild(bAll);
+    panel.appendChild(hint); panel.appendChild(mode);
+    setMode(state.multiMode[c] || "any", false);
+    if (opts.length > 12) {
+      var search = mk("input", "msearch");
+      search.type = "search"; search.placeholder = "Search " + state.headers[c];
+      search.addEventListener("input", function () {
+        var q = search.value.trim().toLowerCase();
+        items.forEach(function (it) { it.el.hidden = q !== "" && it.label.indexOf(q) < 0; });
+      });
+      panel.appendChild(search);
+    }
+    var list = mk("div", "list");
+    opts.forEach(function (o) {
+      var lab = mk("label", "opt"), cb = mk("input");
+      cb.type = "checkbox"; cb.value = o.key;
+      cb.addEventListener("change", function () { pick(o.key, cb.checked); });
+      lab.appendChild(cb); lab.appendChild(mk("span", "t", o.label)); lab.appendChild(mk("span", "n", String(o.n)));
+      list.appendChild(lab); cbs.push(cb); items.push({ el: lab, label: o.label.toLowerCase() });
+    });
+    panel.appendChild(list);
+    var foot = mk("div", "foot"), clr = mk("button", "btn", "Clear");
+    clr.type = "button";
+    clr.addEventListener("click", function () {
+      cbs.forEach(function (cb) { cb.checked = false; });
+      delete state.multi[c]; setLabel(); render();
+    });
+    foot.appendChild(clr); panel.appendChild(foot);
+    det.appendChild(sum); det.appendChild(panel);
+    det.addEventListener("toggle", function () {
+      if (!det.open) return;
+      Array.prototype.forEach.call(els.filters.querySelectorAll("details.multi[open]"), function (d) { if (d !== det) d.open = false; });
+    });
+    setLabel();
+    els.filters.appendChild(det);
   }
 
   function buildFilters() {
@@ -475,6 +602,7 @@
       sel.dataset.col = c;
       els.filters.appendChild(sel);
     });
+    state.multiCols.forEach(buildMultiFilter);
   }
 
   /* ---------- filtering & sorting ---------- */
@@ -483,6 +611,16 @@
     var out = state.rows.filter(function (r) {
       if (state.totalCol >= 0 && els.own.checked && !(Number(r[state.totalCol]) > 0)) return false;
       for (var c in state.filters) { if (String(r[c]).trim() !== state.filters[c]) return false; }
+      for (var mc in state.multi) {
+        var sel = Object.keys(state.multi[mc]);
+        if (!sel.length) continue;
+        var have = tokensOf(r[mc]).map(function (t) { return t.toLowerCase(); });
+        if ((state.multiMode[mc] || "any") === "all") {
+          for (var k = 0; k < sel.length; k++) { if (have.indexOf(sel[k]) < 0) return false; }
+        } else if (!sel.some(function (t) { return have.indexOf(t) >= 0; })) {
+          return false;
+        }
+      }
       if (!q) return true;
       return r.some(function (v) { return String(v).toLowerCase().indexOf(q) !== -1; });
     });
@@ -541,7 +679,7 @@
 
   function render() {
     var rows = visibleRows();
-    els.count.textContent = rows.length.toLocaleString() + " of " + state.rows.length.toLocaleString() + " cards";
+    els.count.textContent = rows.length.toLocaleString() + " of " + state.rows.length.toLocaleString() + " shown";
     if (!rows.length) { els.out.innerHTML = '<div class="empty">No cards match. Clear the filters or try a different search.</div>'; return; }
     if (state.view === "table") renderTable(rows); else renderCards(rows);
   }
@@ -647,7 +785,7 @@
   els.sheet.addEventListener("change", function () { selectSheet(els.sheet.value); });
   els.clear.addEventListener("click", function () {
     state.filters = {}; state.query = ""; els.q.value = "";
-    Array.prototype.forEach.call(els.filters.querySelectorAll("select"), function (s) { s.value = ""; });
+    state.multi = {}; state.multiMode = {}; buildFilters();
     render();
   });
 
@@ -674,6 +812,13 @@
     if (e.key !== "Enter" && e.key !== " ") return;
     var th = e.target.closest("th[data-c]");
     if (th) { e.preventDefault(); sortBy(+th.dataset.c); }
+  });
+
+  document.addEventListener("click", function (e) {
+    Array.prototype.forEach.call(els.filters.querySelectorAll("details.multi[open]"), function (d) { if (!d.contains(e.target)) d.open = false; });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") Array.prototype.forEach.call(els.filters.querySelectorAll("details.multi[open]"), function (d) { d.open = false; });
   });
 
   autoLoad();
