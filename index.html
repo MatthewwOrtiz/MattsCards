@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>My OPTCG Cards</title>
+<title>Matt's OPTCG Cards</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root {
@@ -170,30 +170,22 @@
 
 <header class="top">
   <div>
-    <h1 id="title">My OPTCG Cards</h1>
-    <p class="sub" id="subtitle">Open your Numbers file to browse it here.</p>
-  </div>
-  <div>
-    <div class="actions">
-      <button class="btn" id="changeFile" hidden>Open another file</button>
-    </div>
+    <h1 id="title">Matt's OPTCG Cards</h1>
   </div>
 </header>
 
 <section id="drop" aria-label="Open a Numbers file">
-  <h2>Drop My_OPTCG_Cards.numbers here</h2>
-  <p>Browsers can’t read a file from a path on their own, so pick it once and it loads instantly.</p>
-  <button class="btn primary" id="pick">Choose Numbers file</button>
+  <h2>Loading cards...</h2>
   <input id="file" type="file" accept=".numbers,.xlsx,.xls,.csv" hidden>
 </section>
 <p id="msg" role="alert"></p>
 
 <main id="app">
   <div class="toolbar">
-    <input type="search" id="q" placeholder="Search every column" aria-label="Search">
+    <input type="search" id="q" placeholder="Full Search" aria-label="Search">
     <select id="sheet" aria-label="Sheet" hidden></select>
     <span id="filters" style="display:contents"></span>
-    <label class="own" id="ownWrap" hidden><input type="checkbox" id="own" checked> <span id="ownLabel">Total above 0</span></label>
+    <label class="own" id="ownWrap" hidden><input type="checkbox" id="own" checked> <span id="ownLabel">Inventory</span></label>
     <div class="seg" role="group" aria-label="View">
       <button id="vTable" aria-pressed="true">Table</button>
       <button id="vCards" aria-pressed="false">Cards</button>
@@ -230,10 +222,10 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var els = {
-    drop: $("drop"), file: $("file"), pick: $("pick"), msg: $("msg"), app: $("app"),
+    drop: $("drop"), msg: $("msg"), app: $("app"),
     out: $("out"), q: $("q"), sheet: $("sheet"), filters: $("filters"), count: $("count"),
     vTable: $("vTable"), vCards: $("vCards"), clear: $("clear"), dlg: $("dlg"),
-    own: $("own"), ownWrap: $("ownWrap"), ownLabel: $("ownLabel"), dl: $("dl"), dtitle: $("dtitle"), subtitle: $("subtitle"), change: $("changeFile"), title: $("title")
+    own: $("own"), ownWrap: $("ownWrap"), ownLabel: $("ownLabel"), dl: $("dl"), dtitle: $("dtitle"), title: $("title")
   };
 
   /* ---------- loading ---------- */
@@ -365,7 +357,6 @@
     els.title.textContent = fileName.replace(/\.[^.]+$/, "").replace(/_/g, " ");
     els.drop.style.display = "none";
     els.app.classList.add("on");
-    els.change.hidden = false;
     selectSheet(state.sheetNames[0]);
   }
 
@@ -415,8 +406,6 @@
     state.sort = { col: -1, dir: 1 }; state.filters = {}; state.query = ""; els.q.value = "";
     analyseColumns();
     buildFilters();
-    els.subtitle.textContent = state.rows.length.toLocaleString() + " rows, " + state.headers.length + " columns" +
-      (state.sheetNames.length > 1 ? " on “" + name + "”" : "");
     render();
   }
 
@@ -445,6 +434,8 @@
     if (state.nameCol < 0) {
       for (var d = 0; d < state.headers.length; d++) { if (!state.numCols[d]) { state.nameCol = d; break; } }
     }
+    // no dropdown filter for Rarity
+    state.filterCols = state.filterCols.filter(function (c) { return !/rarity/i.test(state.headers[c]); });
     state.filterCols = state.filterCols.slice(0, 6);
 
     // Image link column: the column with the most URLs, header names like image/link/url win ties
@@ -462,7 +453,7 @@
     state.headers.forEach(function (h, c) { if (state.totalCol < 0 && /^total$/i.test(h.trim())) state.totalCol = c; });
     state.headers.forEach(function (h, c) { if (state.totalCol < 0 && /total/i.test(h)) state.totalCol = c; });
     els.ownWrap.hidden = state.totalCol < 0;
-    if (state.totalCol >= 0) els.ownLabel.textContent = state.headers[state.totalCol] + " above 0";
+    if (state.totalCol >= 0) els.ownLabel.textContent = state.headers[state.totalCol] + " Inventory";
   }
 
   function buildFilters() {
@@ -550,7 +541,7 @@
 
   function render() {
     var rows = visibleRows();
-    els.count.textContent = rows.length.toLocaleString() + " of " + state.rows.length.toLocaleString() + " shown";
+    els.count.textContent = rows.length.toLocaleString() + " of " + state.rows.length.toLocaleString() + " cards";
     if (!rows.length) { els.out.innerHTML = '<div class="empty">No cards match. Clear the filters or try a different search.</div>'; return; }
     if (state.view === "table") renderTable(rows); else renderCards(rows);
   }
@@ -641,10 +632,6 @@
 
 
   /* ---------- events ---------- */
-  els.pick.addEventListener("click", chooseFile);
-  els.change.addEventListener("click", chooseFile);
-  els.file.addEventListener("change", function () { handleFile(els.file.files[0]); els.file.value = ""; });
-
   ["dragenter", "dragover"].forEach(function (ev) {
     document.addEventListener(ev, function (e) { e.preventDefault(); els.drop.classList.add("over"); });
   });
